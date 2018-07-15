@@ -120,16 +120,6 @@ function fullhistory_post_delete( $postid ) {
 add_action( 'delete_post', 'fullhistory_post_delete', 10, 1 );
 
 /**
- * Add the standard RFC5005 namespace to a feed root element.
- */
-function fullhistory_xml_ns() {
-	echo "xmlns:fh=\"http://purl.org/syndication/history/1.0\"\n";
-}
-
-add_action( 'rss2_ns', 'fullhistory_xml_ns' );
-add_action( 'atom_ns', 'fullhistory_xml_ns' );
-
-/**
  * Emit a `<link rel>` tag appropriate for the given feed format.
  *
  * @param string $feed_type One of 'rss2' or 'atom'.
@@ -170,7 +160,7 @@ function fullhistory_xml_head() {
 	// If the total number of posts fits within a single page, use RFC5005
 	// section 2 ("Complete Feeds").
 	if ( $found_posts <= $per_page ) {
-		echo "    <fh:complete/>\n";
+		echo "    <fh:complete xmlns:fh=\"http://purl.org/syndication/history/1.0\"/>\n";
 		return;
 	}
 
@@ -194,7 +184,7 @@ function fullhistory_xml_head() {
 		// If this _is_ an archived page, then RFC5005 says we "SHOULD"
 		// both mark it as an archive and also link to the current
 		// syndication feed that this archive belongs to.
-		echo "    <fh:archive/>\n";
+		echo "    <fh:archive xmlns:fh=\"http://purl.org/syndication/history/1.0\"/>\n";
 		fullhistory_atom_link( $feed_type, 'current', $current_feed );
 	} else {
 		// Otherwise, set up a prev-archive link under the assumption
