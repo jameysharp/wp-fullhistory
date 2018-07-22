@@ -177,10 +177,10 @@ function fullhistory_xml_head() {
 	$newest_page  = (int) ceil( $found_posts / $per_page );
 	$current_feed = get_feed_link( $feed_type );
 
-	// We only allow feed pages that are in ascending order to be archived,
-	// so their contents stay relatively stable. Also, the newest page
-	// can't be considered an archived page.
-	if ( get_query_var( 'order' ) === 'ASC' && $current_page < $newest_page ) {
+	// We only allow feed pages to be archived that are in ascending order
+	// by publication date, so their contents stay relatively stable. Also,
+	// the newest page can't be considered an archived page.
+	if ( get_query_var( 'order' ) === 'ASC' && empty( get_query_var( 'orderby' ) ) && $current_page < $newest_page ) {
 		// If this _is_ an archived page, then RFC5005 says we "SHOULD"
 		// both mark it as an archive and also link to the current
 		// syndication feed that this archive belongs to.
