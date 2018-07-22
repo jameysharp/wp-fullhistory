@@ -175,7 +175,11 @@ function fullhistory_xml_head() {
 	// Note: The 'paged' query variable is reported as 0 if unspecified.
 	$current_page = get_query_var( 'paged' );
 	$newest_page  = (int) ceil( $found_posts / $per_page );
-	$current_feed = get_feed_link( $feed_type );
+	$host         = wp_parse_url( home_url() );
+	$current_feed = remove_query_arg(
+		array( 'order', 'orderby', 'paged', 'fullhistory' ),
+		set_url_scheme( 'http://' . $host['host'] . wp_unslash( $_SERVER['REQUEST_URI'] ) ) // Input var okay.
+	);
 
 	// We only allow feed pages to be archived that are in ascending order
 	// by publication date, so their contents stay relatively stable. Also,
