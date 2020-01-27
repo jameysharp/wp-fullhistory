@@ -2,122 +2,12 @@
 /*
 Plugin Name:  Full-history (RFC5005) feeds
 Description:  Allow RFC5005-capable feed readers to see all posts, not just the most recent.
-Version:      0.2
+Version:      0.3
 Author:       Jamey Sharp
 Author URI:   https://jamey.thesharps.us/
 License:      BSD-2-Clause
 License URI:  https://www.freebsd.org/copyright/freebsd-license.html
 */
-
-/**
- * Test if two arrays have no values in common.
- *
- * @param array $a First array.
- * @param array $b Second array.
- * @return bool False if any element in $a is also in $b, true otherwise.
- */
-function fullhistory_disjoint( $a, $b ) {
-	foreach ( $a as $element ) {
-		if ( in_array( $element, $b, true ) ) {
-			return false;
-		}
-	}
-	return true;
-}
-
-/**
- * Invalidate feed reader caches by changing the URL we use to link to any
- * archived feed pages that might have been affected.
- *
- * @param array $query_params Query parameters to pass to WP_Query to limit
- *                            which posts might be part of a page that should
- *                            be re-fetched.
- */
-function fullhistory_invalidate_client_caches( $query_params = array() ) {
-	$public_stati = get_post_stati( array( 'public' => true ) );
-
-	$change_count = get_option( 'fullhistory_change_count', 1 );
-	++$change_count;
-	update_option( 'fullhistory_change_count', $change_count );
-
-	$query_params = array_merge(
-		$query_params,
-		array(
-			'fields'        => 'ids',
-			'no_found_rows' => true,
-			'nopaging'      => true,
-			'post_status'   => $public_stati,
-		)
-	);
-
-	$query = new WP_Query( $query_params );
-	foreach ( $query->posts as $id ) {
-		update_post_meta( $id, '_fullhistory_version', $change_count );
-	}
-}
-
-add_action( 'update_option_posts_per_rss', 'fullhistory_invalidate_client_caches', 10, 0 );
-
-/**
- * When a post changes, invalidate feed reader client caches as needed.
- *
- * Posts that are not visible in a feed either before or after this change
- * don't need to invalidate any caches, so this function takes the list of the
- * old and new status of the changed post. If the post is being deleted, give
- * only the old status.
- *
- * @param WP_Post $post       The changed post.
- * @param array   $post_stati The post's status, both old and new.
- * @param array   $exclude    Post IDs to not invalidate.
- */
-function fullhistory_post_change( $post, $post_stati, $exclude = array() ) {
-	$public_stati = get_post_stati( array( 'public' => true ) );
-	if ( fullhistory_disjoint( $post_stati, $public_stati ) ) {
-		return;
-	}
-
-	fullhistory_invalidate_client_caches(
-		array(
-			'post__not_in' => $exclude,
-			'date_query'   => array(
-				'after'     => $post->post_date,
-				'inclusive' => true,
-			),
-		)
-	);
-}
-
-/**
- * Invalidate client caches on 'transition_post_status' action.
- *
- * Note that this action fires every time a post is saved, even if its status
- * hasn't actually changed.
- *
- * @param string  $new_status The post's new status.
- * @param string  $old_status The post's old status (possibly the same).
- * @param WP_Post $post       The post that is being saved.
- */
-function fullhistory_post_status_change( $new_status, $old_status, $post ) {
-	fullhistory_post_change( $post, array( $new_status, $old_status ) );
-}
-
-add_action( 'transition_post_status', 'fullhistory_post_status_change', 10, 3 );
-
-/**
- * Invalidate client caches on 'delete_post' action.
- *
- * We have to exclude this post from the invalidation because we're in the
- * middle of deleting it so we need to avoid touching anything related to it in
- * the database.
- *
- * @param int $postid The ID of the post that's being deleted.
- */
-function fullhistory_post_delete( $postid ) {
-	$post = get_post( $postid );
-	fullhistory_post_change( $post, array( $post->post_status ), array( $post->ID ) );
-}
-
-add_action( 'delete_post', 'fullhistory_post_delete', 10, 1 );
 
 /**
  * Emit a `<link rel>` tag appropriate for the given feed format.
@@ -145,10 +35,45 @@ function fullhistory_atom_link( $feed_type, $rel, $url ) {
  * and generates metadata tags from either section 2 or section 4 of RFC5005,
  * based on the query and on the total number of posts.
  *
- * We depend on sorting archived posts in ascending order by publication date.
- * Page 1 must be at the opposite end of the history from the current
- * syndication document so that, under normal circumstances, adding a new post
- * doesn't change any page except the current one.
+ * The simple case is when all posts in the query fit in a single feed document.
+ * In that case, just use section 2 to mark the feed as "complete".
+ *
+ * Section 4 is more complicated because it requires that the URL of an archived
+ * feed page must change if the contents of that page change in any meaningful
+ * way. According to the standard, archived feeds are effectively treated as if
+ * they have a far-future Expires: header, which means in order to invalidate
+ * caches we need to use the same sorts of tricks that people do for CSS and
+ * other static files. See
+ * https://css-tricks.com/strategies-for-cache-busting-css/ for example.
+ *
+ * This implementation depends on sorting archived posts in ascending order by
+ * modification date, and adds to each archived page a URL query parameter
+ * containing the newest modification timestamp of any post in that page.
+ *
+ * If a post is newly added, then it will have a newer modification timestamp
+ * than all other posts, and so be added to the highest-numbered archive page.
+ * That page's 'modified' query parameter will become the timestamp of the new
+ * post.
+ *
+ * If a post is deleted, that changes the position in the paginated list of all
+ * posts which were modified after the last time the deleted post was modified.
+ * As a result, all pagination boundaries after that post move one post later,
+ * so the 'modified' query parameter of all later pages increases.
+ *
+ * If a post is edited, it moves to the end of the list. That's equivalent, from
+ * the perspective of modification timestamps, to deleting it and then adding it
+ * again.
+ *
+ * If the number of posts per RSS feed changes, then that moves all the
+ * pagination boundaries, which means the 'modified' query parameter on page N
+ * will come from a different post than it did before the change, so all
+ * archived pages will be invalidated. If that change is subsequently reverted,
+ * all the old URLs will become valid again, so a client that still has the
+ * previous archives cached won't re-fetch anything.
+ *
+ * NOTE: This assumes that modification times are unique! If two posts have the
+ * same modification time down to the second, then modifying or deleting one of
+ * them may not invalidate the archive page which that post was on.
  *
  * @link https://tools.ietf.org/html/rfc5005
  */
@@ -174,17 +99,16 @@ function fullhistory_xml_head() {
 
 	// Note: The 'paged' query variable is reported as 0 if unspecified.
 	$current_page = get_query_var( 'paged' );
-	$newest_page  = (int) ceil( $found_posts / $per_page );
 	$host         = wp_parse_url( home_url() );
 	$current_feed = remove_query_arg(
-		array( 'order', 'orderby', 'paged', 'fullhistory' ),
+		array( 'order', 'orderby', 'paged', 'modified' ),
 		set_url_scheme( 'http://' . $host['host'] . wp_unslash( $_SERVER['REQUEST_URI'] ) ) // Input var okay.
 	);
 
-	// We only allow feed pages to be archived that are in ascending order
-	// by publication date, so their contents stay relatively stable. Also,
-	// the newest page can't be considered an archived page.
-	if ( get_query_var( 'order' ) === 'ASC' && empty( get_query_var( 'orderby' ) ) && $current_page < $newest_page ) {
+	// Only allow feed pages to be considered archived if they are in
+	// ascending order by modification date, so their contents stay
+	// relatively stable.
+	if ( get_query_var( 'order' ) === 'ASC' && get_query_var( 'orderby' ) === 'modified' ) {
 		// If this _is_ an archived page, then RFC5005 says we "SHOULD"
 		// both mark it as an archive and also link to the current
 		// syndication feed that this archive belongs to.
@@ -201,38 +125,46 @@ function fullhistory_xml_head() {
 		// automatic tools won't usually be looking for RFC5005
 		// metadata in feeds with odd query parameters set, so it
 		// should be harmless.
-		$current_page = $newest_page;
+		$newest_page  = (int) ceil( $found_posts / $per_page );
+		$current_page = $newest_page + 1;
 	}
 
 	// Only page 2 and later can have a prev-archive link, since there is
 	// no archive earlier than page 1.
 	if ( $current_page > 1 ) {
-		// According to the standard, archived feeds are effectively
-		// treated as if they have a far-future Expires: header, which
-		// means in order to invalidate caches we need to use the same
-		// sorts of tricks that people do for CSS and other static
-		// files. See
-		// https://css-tricks.com/strategies-for-cache-busting-css/ for
-		// example.
-		$prev_query   = new WP_Query(
-			array(
-				'fields'        => 'ids',
-				'no_found_rows' => true,
-				'feed'          => 'feed',
-				'order'         => 'ASC',
-				'posts_per_rss' => 1,
-				'offset'        => ( $current_page - 1 ) * $per_page - 1,
+		// Repeat the current query, but one page earlier. If this
+		// wasn't already a query for an archive page, then the
+		// order/orderby parameters may need to be overridden and we'll
+		// dig up the newest page.
+		$prev_query = new WP_Query(
+			array_merge(
+				$wp_query->query_vars,
+				array(
+					'no_found_rows' => true,
+					'order'         => 'ASC',
+					'orderby'       => 'modified',
+					'paged'         => $current_page - 1,
+				)
 			)
 		);
-		$change_count = get_post_meta( $prev_query->posts[0], '_fullhistory_version', true );
-		if ( empty( $change_count ) ) {
-			$change_count = 1;
-		}
 
+		// Get the most recent modification time from that previous
+		// page. Since the posts are in ascending order by modification
+		// time, we just need to look at the last one. Use GMT, not
+		// local time, so the constructed URL doesn't change if the
+		// server's timezone setting is changed.
+		$prev_posts   = $prev_query->posts;
+		$prev_modtime = $prev_posts[ count( $prev_posts ) - 1 ]->post_modified_gmt;
+
+		// Earlier, $current_feed was constructed by stripping off all
+		// the order, orderby, modified, and paged query parameters.
+		// Construct a new link by adding them back now with the right
+		// values.
 		$prev_archive = add_query_arg(
 			array(
-				'order'       => 'ASC',
-				'fullhistory' => $change_count,
+				'order'    => 'ASC',
+				'orderby'  => 'modified',
+				'modified' => strtotime( $prev_modtime ),
 			),
 			$current_feed
 		);
@@ -240,8 +172,7 @@ function fullhistory_xml_head() {
 		// Linking to page 1 is special because if you pass 'paged=1',
 		// WordPress redirects to a canonical URL with that page number
 		// removed. Rather than triggering an extra HTTP request due to
-		// the redirect, we skip adding the query parameter in that
-		// case.
+		// the redirect, skip adding the query parameter in that case.
 		if ( $current_page > 2 ) {
 			$prev_archive = add_query_arg( 'paged', $current_page - 1, $prev_archive );
 		}
