@@ -46,34 +46,37 @@ function fullhistory_atom_link( $feed_type, $rel, $url ) {
  * other static files. See
  * https://css-tricks.com/strategies-for-cache-busting-css/ for example.
  *
- * This implementation depends on sorting archived posts in ascending order by
- * modification date, and adds to each archived page a URL query parameter
- * containing the newest modification timestamp of any post in that page.
+ * To do that, there needs to be some property of a given page of results that
+ * is efficient to compute but that will change if that page or any older page
+ * has changed, so we can incorporate that property into each page's URL.
  *
- * If a post is newly added, then it will have a newer modification timestamp
- * than all other posts, and so be added to the highest-numbered archive page.
- * That page's 'modified' query parameter will become the timestamp of the new
- * post.
+ * This implementation sorts archived posts in ascending order by
+ * modification timestamp, so that:
  *
- * If a post is deleted, that changes the position in the paginated list of all
- * posts which were modified after the last time the deleted post was modified.
- * As a result, all pagination boundaries after that post move one post later,
- * so the 'modified' query parameter of all later pages increases.
+ * - If a post is newly added, then it will have a newer modification timestamp
+ *   than all other posts, and so be added to the highest-numbered archive page.
  *
- * If a post is edited, it moves to the end of the list. That's equivalent, from
- * the perspective of modification timestamps, to deleting it and then adding it
- * again.
+ * - If a post is deleted, that changes the position in the paginated list of
+ *   all posts which were modified after the last time the deleted post was
+ *   modified. As a result, all pagination boundaries after that post move one
+ *   post later.
  *
- * If the number of posts per RSS feed changes, then that moves all the
- * pagination boundaries, which means the 'modified' query parameter on page N
- * will come from a different post than it did before the change, so all
- * archived pages will be invalidated. If that change is subsequently reverted,
- * all the old URLs will become valid again, so a client that still has the
- * previous archives cached won't re-fetch anything.
+ * - If a post is edited, it moves to the end of the list. That's equivalent,
+ *   from the perspective of modification timestamps, to deleting it and then
+ *   adding it again.
  *
- * NOTE: This assumes that modification times are unique! If two posts have the
- * same modification time down to the second, then modifying or deleting one of
- * them may not invalidate the archive page which that post was on.
+ * - If the number of posts per RSS feed changes, then that moves all the
+ *   pagination boundaries.
+ *
+ * Then we need some property of each page that changes when its pagination
+ * boundaries move. One approach which almost works is to use the newest
+ * modification timestamp of any post on that page. However, that fails in the
+ * uncommon case where two posts are modified in the same second.
+ *
+ * Instead, this implementation incorporates the post-ID of the newest post on a
+ * page into that page's URL. If the pagination boundary shifts, then the newest
+ * post will be one with a different ID, satisfying the requirement that its URL
+ * changes.
  *
  * @link https://tools.ietf.org/html/rfc5005
  */
@@ -141,6 +144,7 @@ function fullhistory_xml_head() {
 				$wp_query->query_vars,
 				array(
 					'no_found_rows' => true,
+					'fields'        => 'ids',
 					'order'         => 'ASC',
 					'orderby'       => 'modified',
 					'paged'         => $current_page - 1,
@@ -148,13 +152,11 @@ function fullhistory_xml_head() {
 			)
 		);
 
-		// Get the most recent modification time from that previous
-		// page. Since the posts are in ascending order by modification
-		// time, we just need to look at the last one. Use GMT, not
-		// local time, so the constructed URL doesn't change if the
-		// server's timezone setting is changed.
-		$prev_posts   = $prev_query->posts;
-		$prev_modtime = $prev_posts[ count( $prev_posts ) - 1 ]->post_modified_gmt;
+		// Get the most recent post ID from that previous page. Since
+		// the posts are in ascending order by modification time, we
+		// just need to look at the last post.
+		$prev_ids = $prev_query->posts;
+		$prev_id  = $prev_ids[ count( $prev_ids ) - 1 ];
 
 		// Earlier, $current_feed was constructed by stripping off all
 		// the order, orderby, modified, and paged query parameters.
@@ -164,7 +166,7 @@ function fullhistory_xml_head() {
 			array(
 				'order'    => 'ASC',
 				'orderby'  => 'modified',
-				'modified' => strtotime( $prev_modtime ),
+				'modified' => $prev_id,
 			),
 			$current_feed
 		);
