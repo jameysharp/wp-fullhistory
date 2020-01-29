@@ -100,8 +100,6 @@ function fullhistory_xml_head() {
 		$feed_type = get_default_feed();
 	}
 
-	// Note: The 'paged' query variable is reported as 0 if unspecified.
-	$current_page = get_query_var( 'paged' );
 	$host         = wp_parse_url( home_url() );
 	$current_feed = remove_query_arg(
 		array( 'order', 'orderby', 'paged', 'modified' ),
@@ -117,6 +115,9 @@ function fullhistory_xml_head() {
 		// syndication feed that this archive belongs to.
 		echo "\t<fh:archive xmlns:fh=\"http://purl.org/syndication/history/1.0\"/>\n";
 		fullhistory_atom_link( $feed_type, 'current', $current_feed );
+
+		// Note: The 'paged' query variable is reported as 0 if unspecified.
+		$prev_page = get_query_var( 'paged' ) - 1;
 	} else {
 		// Otherwise, set up a prev-archive link under the assumption
 		// that the feed we're generating right now is the current
@@ -128,17 +129,19 @@ function fullhistory_xml_head() {
 		// automatic tools won't usually be looking for RFC5005
 		// metadata in feeds with odd query parameters set, so it
 		// should be harmless.
-		$newest_page  = (int) ceil( $found_posts / $per_page );
-		$current_page = $newest_page + 1;
+		//
+		// Point to the newest page, which may not be complete yet, but
+		// that's okay because as it changes the link computed below
+		// will change.
+		$prev_page = (int) ceil( $found_posts / $per_page );
 	}
 
 	// Only page 2 and later can have a prev-archive link, since there is
 	// no archive earlier than page 1.
-	if ( $current_page > 1 ) {
+	if ( $prev_page >= 1 ) {
 		// Repeat the current query, but one page earlier. If this
 		// wasn't already a query for an archive page, then the
-		// order/orderby parameters may need to be overridden and we'll
-		// dig up the newest page.
+		// order/orderby parameters may need to be overridden.
 		$prev_query = new WP_Query(
 			array_merge(
 				$wp_query->query_vars,
@@ -147,7 +150,7 @@ function fullhistory_xml_head() {
 					'fields'        => 'ids',
 					'order'         => 'ASC',
 					'orderby'       => 'modified',
-					'paged'         => $current_page - 1,
+					'paged'         => $prev_page,
 				)
 			)
 		);
@@ -175,8 +178,8 @@ function fullhistory_xml_head() {
 		// WordPress redirects to a canonical URL with that page number
 		// removed. Rather than triggering an extra HTTP request due to
 		// the redirect, skip adding the query parameter in that case.
-		if ( $current_page > 2 ) {
-			$prev_archive = add_query_arg( 'paged', $current_page - 1, $prev_archive );
+		if ( $prev_page > 1 ) {
+			$prev_archive = add_query_arg( 'paged', $prev_page, $prev_archive );
 		}
 
 		fullhistory_atom_link( $feed_type, 'prev-archive', $prev_archive );
