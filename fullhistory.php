@@ -93,18 +93,22 @@ function fullhistory_xml_head() {
 	}
 
 	// Otherwise, use the more complicated section 4 ("Archived Feeds").
-	// Namespaces and link targets vary based on whether this is an RSS or
-	// an Atom feed, so look that up now.
+	// Namespaces vary based on whether this is an RSS or an Atom feed, so
+	// look that up now.
 	$feed_type = get_query_var( 'feed' );
 	if ( 'feed' === $feed_type ) {
 		$feed_type = get_default_feed();
 	}
 
-	$host         = wp_parse_url( home_url() );
-	$current_feed = remove_query_arg(
-		array( 'order', 'orderby', 'paged', 'modified' ),
-		set_url_scheme( 'http://' . $host['host'] . wp_unslash( $_SERVER['REQUEST_URI'] ) ) // Input var okay.
-	);
+	// WordPress 5.3.0 provides "get_self_link()" but this is a copy of that
+	// function to support earlier versions. Code style warnings are
+	// suppressed here because this is how it works in core.
+	$host = wp_parse_url( home_url() );
+	$self = set_url_scheme( 'http://' . $host['host'] . wp_unslash( $_SERVER['REQUEST_URI'] ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotValidated,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+
+	// Strip off query parameters which we use for archive pages, to get a
+	// feed URL that is a reasonable choice for "current" feed.
+	$current_feed = remove_query_arg( array( 'order', 'orderby', 'paged', 'modified' ), $self );
 
 	// Only allow feed pages to be considered archived if they are in
 	// ascending order by modification date, so their contents stay
