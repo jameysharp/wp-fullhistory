@@ -18,9 +18,9 @@ License URI:  https://www.freebsd.org/copyright/freebsd-license.html
  */
 function fullhistory_atom_link( $feed_type, $rel, $url ) {
 	if ( 'rss2' === $feed_type ) {
-		echo '    <atom:link';
+		echo "\t<atom:link";
 	} elseif ( 'atom' === $feed_type ) {
-		echo '    <link';
+		echo "\t<link";
 	} else {
 		// Don't know how to format for this feed type.
 		return;
@@ -88,7 +88,7 @@ function fullhistory_xml_head() {
 	// If the total number of posts fits within a single page, use RFC5005
 	// section 2 ("Complete Feeds").
 	if ( $found_posts <= $per_page ) {
-		echo "    <fh:complete xmlns:fh=\"http://purl.org/syndication/history/1.0\"/>\n";
+		echo "\t<fh:complete xmlns:fh=\"http://purl.org/syndication/history/1.0\"/>\n";
 		return;
 	}
 
@@ -115,7 +115,7 @@ function fullhistory_xml_head() {
 		// If this _is_ an archived page, then RFC5005 says we "SHOULD"
 		// both mark it as an archive and also link to the current
 		// syndication feed that this archive belongs to.
-		echo "    <fh:archive xmlns:fh=\"http://purl.org/syndication/history/1.0\"/>\n";
+		echo "\t<fh:archive xmlns:fh=\"http://purl.org/syndication/history/1.0\"/>\n";
 		fullhistory_atom_link( $feed_type, 'current', $current_feed );
 	} else {
 		// Otherwise, set up a prev-archive link under the assumption
