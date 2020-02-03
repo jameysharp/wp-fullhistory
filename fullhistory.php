@@ -69,14 +69,20 @@ function fullhistory_atom_link( $feed_type, $rel, $url ) {
  *   pagination boundaries.
  *
  * Then we need some property of each page that changes when its pagination
- * boundaries move. One approach which almost works is to use the newest
- * modification timestamp of any post on that page. However, that fails in the
- * uncommon case where two posts are modified in the same second.
+ * boundaries move. Because a post can only be removed from the middle of an
+ * archived page, never inserted, the identity of the last post on each page is
+ * sufficient. So part of our cache key is the post's permalink, which serves to
+ * detect pagination boundary changes as well as changes to the permalink
+ * structure.
  *
- * Instead, this implementation incorporates the post-ID of the newest post on a
- * page into that page's URL. If the pagination boundary shifts, then the newest
- * post will be one with a different ID, satisfying the requirement that its URL
- * changes.
+ * But if a suffix of the posts are all modified in the same order that they
+ * were previously modified, then the pagination boundaries won't have changed,
+ * even though the posts have. So this implementation also includes the post's
+ * modification timestamp in the cache key. (Mod-time alone wouldn't be enough
+ * if two posts were modified in the same second.)
+ *
+ * If there are other aspects of a post which can change without updating the
+ * post's modification time, then those may need to be added to the cache key.
  *
  * @link https://tools.ietf.org/html/rfc5005
  */
@@ -143,7 +149,8 @@ function fullhistory_xml_head() {
 	// Only page 2 and later can have a prev-archive link, since there is
 	// no archive earlier than page 1.
 	if ( $prev_page >= 1 ) {
-		// Repeat the current query, but one page earlier. If this
+		// Repeat the current query, but one page earlier, and only the
+		// last (most recently modified) post from that page. If this
 		// wasn't already a query for an archive page, then the
 		// order/orderby parameters may need to be overridden.
 		$prev_query = new WP_Query(
@@ -151,19 +158,33 @@ function fullhistory_xml_head() {
 				$wp_query->query_vars,
 				array(
 					'no_found_rows' => true,
-					'fields'        => 'ids',
 					'order'         => 'ASC',
 					'orderby'       => 'modified',
-					'paged'         => $prev_page,
+					'posts_per_rss' => 1,
+					'offset'        => $prev_page * $per_page - 1,
 				)
 			)
 		);
+		$prev_post  = $prev_query->posts[0];
 
-		// Get the most recent post ID from that previous page. Since
-		// the posts are in ascending order by modification time, we
-		// just need to look at the last post.
-		$prev_ids = $prev_query->posts;
-		$prev_id  = $prev_ids[ count( $prev_ids ) - 1 ];
+		// The combination of modification time (in GMT, so time-zone
+		// changes don't affect this) and the post's URL should be
+		// enough to trigger a cache update if anything important
+		// changes.
+		$mod_key = implode(
+			'|',
+			array(
+				$prev_post->post_modified_gmt,
+				get_permalink( $prev_post ),
+			)
+		);
+
+		// Turn the key into a short URL-safe string. This doesn't need
+		// to be secure: if someone with control of the site wants to
+		// make RSS readers not see some updates, they have easier
+		// options already. It just needs to give good odds that if the
+		// key parameters change, the hash will also change.
+		$mod_key = hash( 'fnv1a64', $mod_key );
 
 		// Earlier, $current_feed was constructed by stripping off all
 		// the order, orderby, modified, and paged query parameters.
@@ -173,7 +194,7 @@ function fullhistory_xml_head() {
 			array(
 				'order'    => 'ASC',
 				'orderby'  => 'modified',
-				'modified' => $prev_id,
+				'modified' => $mod_key,
 			),
 			$current_feed
 		);
